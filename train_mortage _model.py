@@ -258,12 +258,75 @@ y_pred_class_validation = y_pred_validation.astype(int)
 model_name = 'Mortgage Approval Prediction Model'
 
 import os
+token = os.environ['USER_ACCESS_TOKEN']
+url = os.environ['RUNTIME_ENV_APSX_URL']
 
 from ibm_watson_machine_learning import APIClient
-
-location = os.environ['RUNTIME_ENV_REGION'] 
-wml_credentials = {
-    "apikey": ibmcloud_api_key,
-    "url": 'https://' + location + '.ml.cloud.ibm.com'
+WML_CREDENTIALS = {
+    "url": os.environ['RUNTIME_ENV_APSX_URL'],
+    "token": os.environ['USER_ACCESS_TOKEN'],
+    "instance_id" : "openshift",
+    "version": '5.0'
 }
-client = APIClient(wml_credentials)
+
+wml_client = APIClient(WML_CREDENTIALS)
+
+PROJECT_UID= os.environ['PROJECT_ID']
+wml_client.set.default_project(PROJECT_UID)
+# Set the current project as the default project to save the model.
+PROJECT_UID= os.environ['PROJECT_ID']
+wml_client.set.default_project(PROJECT_UID)
+
+# Storing Pipeline Details
+# Storing the model requires us to curate and specify some properties:
+# • The name for the pipeline as specified above
+# • Training data reference, that points to the data used to train the model.
+# • The Software Specification, that refers to the runtime used in this Notebook and the WML deployment.
+# You use the software specification default_py3.10 to store the models.
+
+fields=X_train.columns.tolist()
+metadata_dict = {'target_col' : target_col, 'probability_threshold' : opt_threshold, 'numeric_features_list':numeric_features_list,'fields':fields,'categorical_cols':categorical_cols}
+
+training_data_references = [
+                {
+                    "id": "Mortgage_data",
+                    "type": "connection_asset",
+                    "connection": {
+                        "id": None,
+                    },
+                    "location": {
+                        "select_statement": sql_query,
+                        "table_name": "Mortgage_Approval_view"
+                    }
+                }]
+software_spec_uid = wml_client.software_specifications.get_id_by_name("runtime-23.1-py3.10")
+print("Software Specification ID: {}".format(software_spec_uid))
+
+model_props = {
+        wml_client._models.ConfigurationMetaNames.NAME:model_name,
+        wml_client._models.ConfigurationMetaNames.TYPE: "scikit-learn_1.1",
+        wml_client._models.ConfigurationMetaNames.SOFTWARE_SPEC_UID: software_spec_uid,
+        wml_client._models.ConfigurationMetaNames.LABEL_FIELD:"MORTGAGE_APPROVAL",
+        wml_client._models.ConfigurationMetaNames.INPUT_DATA_SCHEMA:[{'id': '1', 'type': 'struct', 'fields': [{"name":column_name,"type":str(column_type[0])} for column_name,column_type in pd.DataFrame(X_train.dtypes).T.to_dict('list').items()]}],
+        wml_client._models.ConfigurationMetaNames.TAGS: ['mortgage_prediction_pipeline_tag'],
+        wml_client.repository.ModelMetaNames.TRAINING_DATA_REFERENCES: training_data_references,
+        wml_client._models.ConfigurationMetaNames.CUSTOM: metadata_dict
+    }
+
+print("Storing model .....")
+
+published_model_details = wml_client.repository.store_model(model=model_pipeline, meta_props=model_props, 
+                        training_data=df_prep.drop(["MORTGAGE_APPROVAL"], axis=1), training_target=df_prep.MORTGAGE_APPROVAL)
+model_uid = wml_client.repository.get_model_id(published_model_details)
+print("The model",model_name,"successfully stored in the project")
+print("Model ID: {}".format(model_uid))
+
+# Save the model using pickle
+import pickle
+
+with open("mortgage_approval.pkl", "wb") as f:
+    pickle.dump(clf, f)
+
+!ls -l
+
+wslib.upload_file("mortgage_approval.pkl",overwrite=True)
